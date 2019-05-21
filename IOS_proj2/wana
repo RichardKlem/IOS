@@ -1,0 +1,251 @@
+#!/bin/sh
+
+#author: Richard Klem, xklemr00@fit.vutbr.cz
+#date: 17.3.2019
+
+POSIXLY_CORRECT=yes
+
+###########################---Script information---##########################
+# BRIEF - Wana script allows the user to use multiple filters and one selected
+#        command over given web logs
+# PRE-CONDITION - Inputs are in correct formats
+# POST-CONDITION - Scrip executes specified commands and filters
+# RETURN - Script returns succes if everything was ok, else it returns failure
+#############################################################################
+
+
+#####---Functions---#####
+
+# BRIEF - Function 'load_params' read parameters and set boolean values
+#         for founded parameters, arguments of switches are stored as well
+#         as log files if they were given. If not script is waiting for
+#         user input. Validity of date input and number of commands are
+#         also checked. Input of ip and uri filter is not checked because
+#         script support regular expresions in these cases.
+# PRE-CONDITION - logs must be given, switches are optional
+# POST-CONDITION - boole values are set, arguments and names of logs are stored
+# RETURN - nothing, this is more like procedure than function
+load_params() {
+#cycle reads arguments at command line one by one and store them
+logs_not_given=1
+cmd_sum=0 #counts number of commands
+
+while [ "$1" != "" ]; do
+  case $1 in
+    -a)         after_date_filter=1
+                shift
+                tmp=$1
+                #input control check
+                if ! date -d "$tmp" +%s > /dev/null 2>&1 ;then
+                  echo "You have inserted invalid date: $tmp"
+                  echo 'Follow this format: "YYYY-MM-DD HH:MM:SS"'
+                  exit 1
+                fi
+                after_date_value=$(date -d "$tmp" +%s)
+                ;;
+
+    -b)         before_date_filter=1
+                shift
+                tmp=$1
+                #input control check
+                if ! date -d "$tmp" +%s > /dev/null 2>&1 ;then
+                  echo "You have inserted invalid date: $tmp"
+                  echo 'Follow this format: "YYYY-MM-DD HH:MM:SS"'
+                  exit 1
+                fi
+                before_date_value=$(date -d "$tmp" +%s)
+                ;;
+
+    -ip)        ip_filter=1
+                shift
+                ip_value="$1"
+                ;;
+
+    -uri)       uri_filter=1
+                shift
+                uri_pattern="$1"
+                ;;
+
+    list-ip)    list_ip_cmd=1
+                cmd_sum=$((cmd_sum+1))
+                ;;
+
+    list-hosts) list_hosts_cmd=1
+                cmd_sum=$((cmd_sum+1))
+                ;;
+
+    list-uri)   list_uri_cmd=1
+                cmd_sum=$((cmd_sum+1))
+                ;;
+
+    hist-ip)    hist_ip_cmd=1
+                cmd_sum=$((cmd_sum+1))
+                ;;
+
+    hist-load)  hist_load_cmd=1
+                cmd_sum=$((cmd_sum+1))
+                ;;
+
+    *)          logs="$*"
+                logs_not_given=0
+                break
+                ;;
+  esac
+  shift
+done
+#if log files were not given then script is waiting for users input
+if [ "$logs_not_given" = 1 ];then
+  read -r input
+  logs="$input"
+fi
+
+#check if not more than 1 command was given
+if [ "$cmd_sum" -gt 1 ];then
+  echo "You can choose only one command."
+  echo "You gave $cmd_sum commands"
+  exit 1
+fi
+} #END of load_params function
+
+
+# BRIEF - procedure filters log records that are after specified date
+# PRE-CONDITION - argument must be in this format: "YYYY-MM-DD HH:MM:SS"
+#                 argument has to be given as one argument in quotes
+# POST-CONDITION - print records after specified date or pass the input on
+after_date_func(){
+    if [ "$after_date_filter" = 1 ]; then
+      first=0
+
+      while read -r row; do
+        first=$(date -d "$(printf "%s" "$row" | awk '{print $4}' | cut -c 2- |
+        awk '{gsub (/[\/]/,"-");}1' | awk '{sub (/[\:]/," ");}1')" +%s)
+
+        if [ "${first}" -gt "${after_date_value}" ];then
+          printf "%s" "$row"
+          printf "\n"
+        fi
+      done
+
+    else
+      awk '{print}'
+    fi
+  }
+
+
+  # BRIEF - procedure filters log records that are before specified date
+  # PRE-CONDITION - argument must be in this format: "YYYY-MM-DD HH:MM:SS"
+  #                 argument has to be given as one argument in quotes
+  # POST-CONDITION - print records before specified date or pass the input on
+before_date_func(){
+    if [ "$before_date_filter" = 1 ]; then
+
+      while read -r row; do
+        first=$(date -d "$(printf "%s" "$row" | awk '{print $4}' | cut -c 2-|
+        awk '{gsub (/[\/]/,"-");}1' | awk '{sub (/[\:]/," ");}1')" +%s)
+        second="$before_date_value"
+
+        if [ "$second" -gt "$first" ];then
+          printf "%s" "$row"
+          printf "\n"
+        fi
+      done
+
+    else
+      awk '{print}'
+    fi
+  }
+
+
+  # BRIEF - procedure filters log records that have specified ip-address
+  # PRE-CONDITION - argument could be normal regex
+  # POST-CONDITION - print records specified ip-address or pass the input on
+ip_filter_func(){
+    if [ "$ip_filter" = 1 ]; then
+        awk -v var="$ip_value" '$1~var {print $0}'
+    else
+      awk '{print}'
+    fi
+  }
+
+  # BRIEF - procedure filters log records that have specified uri
+  # PRE-CONDITION - argument could be normal regex
+  # POST-CONDITION - print records with specified uri or pass the input on
+uri_filter_func(){
+    if [ "$uri_filter" = 1 ]; then
+        awk -v var="$uri_pattern" '$7~var {print $0}'
+        uri_filter=0
+    else
+      awk '{print}'
+    fi
+}
+
+
+  # BRIEF - More complex function that execute one command selected by user
+  # PRE-CONDITION - hasn't any argument, use filters to filter log records
+  # POST-CONDITION - command has been executed if were any given
+command_execute() {
+    ###___LIST-IP___###
+    if [ "$list_ip_cmd" = 1 ]; then
+      awk '{print $1}' | awk '!seen[$0] {print} {++seen[$0]}'
+
+    ###___LIST-HOSTS___###
+    elif [ "$list_hosts_cmd" = 1 ]; then
+      awk '{print $1}' |
+      while read -r row; do
+        result=0
+
+        host "$row" | grep -E -q ".*\(.*\).*" && result=1
+
+        if [ "$result" = 1 ]; then
+          echo "$row"
+        else
+          host "$row" | awk '{print $5}'
+        fi
+
+      done | awk '!seen[$0] {print} {++seen[$0]}'
+
+    ###___LIST-URI___###
+    elif [ "$list_uri_cmd" = 1 ]; then
+      list_uri_pattern="GET|POST|HEAD|PUT|DELETE|CONNECT|OPTIONS|TRACE|PATCH"
+      awk -v var="$list_uri_pattern" '$0~var {print $7}' |
+      awk '!seen[$0] {print} {++seen[$0]}'
+
+    ###___HIST-IP___###
+    elif [ "$hist_ip_cmd" = 1 ]; then
+      awk '{print $1}' | sort |
+      awk '{dups[$1]++} END{for (ip in dups) {printf ip; printf " "dups[ip]" ";
+       for(i=0;i<dups[ip];i++) printf "#";printf "\n"}}' |
+      sort -r -k 2 -n | awk '{print $1 " (" $2 "): " $3}'
+
+    ###___HIST-LOAD___###
+    elif [ "$hist_load_cmd" = 1 ]; then
+      while read -r row; do
+
+        time=$(date -d "$(printf "%s" "$row" | awk '{print $4}' | cut -c 2-|
+        awk '{gsub (/[\/]/,"-");}1' | awk '{sub (/[\:]/," ");}1')" +%s)
+
+        time2=$(date -d "@$time" +"%Y-%m-%d_%H:00")
+        echo "$time2"
+
+      done  |
+      awk '{dups[$1]++} END{for (date in dups) {printf date; printf " "dups[date]" ";
+       for(i=0;i<dups[date];i++) printf "#";printf "\n"}}' |
+       sort | awk '{print $1 " (" $2 "): " $3}' | awk '{sub (/[\_]/," ");}1'
+
+    ###___PASS_ON___###
+    else
+      awk '{print}'
+    fi
+}
+
+
+######_____MAIN_____######
+load_params "$@"
+
+zcat -f $logs | after_date_func | before_date_func |
+ip_filter_func | uri_filter_func | command_execute
+exit 0
+#
+#
+#
+#END of file
